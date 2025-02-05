@@ -37,7 +37,7 @@ public class AuthController {
                 .issuedAt(instant) // establecemos la hora de mision del token
                 // establecemos la fecha de expiracion de jwt 5 minutos a partir de la hora actual
                 .expiresAt(instant.plus(5, ChronoUnit.MINUTES))
-                .issuer("security service")// emisor del token
+                .issuer("security-service")// emisor del token
                 .claim("scope",scope)
                 .build();
 
