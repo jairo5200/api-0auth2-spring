@@ -1,16 +1,21 @@
 package com.jb.securityservice.controller;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
-import org.springframework.security.oauth2.jwt.JwtClaimsSet;
-import org.springframework.security.oauth2.jwt.JwtEncoder;
-import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.oauth2.jwt.*;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -21,28 +26,75 @@ public class AuthController {
     @Autowired
     private JwtEncoder jwtEncoder;
 
+    @Autowired
+    private JwtDecoder jwtDecoder;
+
+    @Autowired
+    private AuthenticationManager authenticationManager;
+
+    @Autowired
+    private UserDetailsService userDetailsService;
+
     @PostMapping("/token")
-    public Map<String,String> generarToken(Authentication authentication){
+    public ResponseEntity<Map<String,String>> generarToken(String grantType,String username, String password,Boolean whithRefreshToken,String refreshToken){
+        String subject = null;
+        String scope = null;
+
+        if (grantType.equals("password")){
+            // autenticamos al usuario con sus datos
+            Authentication authentication = authenticationManager.authenticate(
+                    new UsernamePasswordAuthenticationToken(username,password)
+            );
+
+            // obtenemos los datos del usuario autenticado
+            subject =authentication.getName();
+            scope = authentication.getAuthorities()
+                    .stream().map(auth -> auth.getAuthority())
+                    .collect(Collectors.joining(" "));
+        }
+        else if(grantType.equals("refreshToken")){
+            if (refreshToken ==  null){
+                return new ResponseEntity<>(Map.of("errorMenssage","el refresh token es requerido"), HttpStatus.UNAUTHORIZED);
+            }
+            Jwt decodeJwt = null;
+            try {
+                //extraemos informacion del refresh token
+                decodeJwt = jwtDecoder.decode(refreshToken);
+            }
+            catch (JwtException exception){
+                return new ResponseEntity<>(Map.of("errorMessage",exception.getMessage()),HttpStatus.UNAUTHORIZED);
+            }
+
+            subject = decodeJwt.getSubject();
+            UserDetails userDetails = userDetailsService.loadUserByUsername(subject);
+            Collection<? extends GrantedAuthority> authorities = userDetails.getAuthorities();
+            scope = authorities.stream().map(auth -> auth.getAuthority()).collect(Collectors.joining(" "));
+        }
         Map<String,String> idToken = new HashMap<>();
-        Instant instant = Instant.now(); //obtenemos la hora actual
-
-        // convertimos las autoridades en cadena
-        String scope = authentication.getAuthorities()
-                .stream()
-                .map(GrantedAuthority::getAuthority)
-                .collect(Collectors.joining(""));
-
+        Instant instant = Instant.now();
         JwtClaimsSet jwtClaimsSet = JwtClaimsSet.builder()
-                .subject(authentication.getName()) // establecemos el nombre de usuario autenticado
-                .issuedAt(instant) // establecemos la hora de mision del token
-                // establecemos la fecha de expiracion de jwt 5 minutos a partir de la hora actual
-                .expiresAt(instant.plus(5, ChronoUnit.MINUTES))
-                .issuer("security-service")// emisor del token
+                .subject(subject)
+                .issuedAt(instant)
+                .expiresAt(instant.plus(whithRefreshToken?1:5,ChronoUnit.MINUTES))
+                .issuer("security-service")
                 .claim("scope",scope)
                 .build();
 
-        String jwtAccesToken = jwtEncoder.encode(JwtEncoderParameters.from(jwtClaimsSet)).getTokenValue();
-        idToken.put("accessToken",jwtAccesToken);
-        return idToken;
+        String jwtAccessToken = jwtEncoder.encode(JwtEncoderParameters.from(jwtClaimsSet)).getTokenValue();
+        idToken.put("accessToken",jwtAccessToken);
+
+        if (whithRefreshToken){
+            JwtClaimsSet jwtClaimsSetRefresh = JwtClaimsSet.builder()
+                    .subject(subject)
+                    .issuedAt(instant)
+                    .expiresAt(instant.plus(5,ChronoUnit.MINUTES))
+                    .issuer("security-service")
+                    .claim("scope",scope)
+                    .build();
+
+            String jwtRefreshToken = jwtEncoder.encode(JwtEncoderParameters.from(jwtClaimsSet)).getTokenValue();
+            idToken.put("refreshToken",jwtRefreshToken);
+        }
+        return ResponseEntity.ok(idToken);
     }
 }
